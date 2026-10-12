@@ -1,0 +1,8 @@
+{
+  "notice": "All data below is fictional and intended only for a classroom workflow demonstration. It does not represent actual market prices. example.com URLs are placeholders.",
+  "samples": [
+    {"title": "Demo sample A: Dell P2419H, working normally, with stand and cables", "price": "350.00", "currency": "CNY", "price_kind": "asking", "condition": "Used for two years, minor cosmetic wear", "url": "https://example.com/demo-a"},
+    {"title": "Demo sample B: Dell P2419H, with stand, no original packaging", "price": "320.00", "currency": "CNY", "price_kind": "asking", "condition": "Working normally, scratches on the casing", "url": "https://example.com/demo-b"},
+    {"title": "Demo sample C: Dell P2419H, good cosmetic condition", "price": "390.00", "currency": "CNY", "price_kind": "asking", "condition": "Working normally, all accessories included", "url": "https://example.com/demo-c"}
+  ]
+}

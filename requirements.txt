@@ -1,0 +1,6 @@
+openai-agents==0.15.1
+# Match the course SDK pair; newer openai 2.54 changes token-usage fields.
+openai==2.34.0
+httpx>=0.28,<1
+python-dotenv>=1.0,<2
+ddgs==9.16.0
