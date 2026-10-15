@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from agents import Agent, function_tool
-from ddgs import DDGS
-from ddgs.exceptions import DDGSException
 
 from listing_agent import build_listing_agent
 from manager_agent import build_manager_agent
@@ -33,7 +29,17 @@ def build_team(state: WorkflowState, model: Any, *, enable_web: bool = False) ->
             # Revised results invalidate dependent stages, including earlier approval.
             for downstream in stage_order[stage_order.index(stage) + 1 :]:
                 state.results.pop(downstream, None)
+            if stage in {"facts", "market"}:
+                state.web_lookups.clear()
             state.results[stage] = output
+            if stage == "market" and enable_web:
+                state.web_lookups = [
+                    {
+                        "tool": "web_search",
+                        "provider": "openai",
+                        "sources": [reference.model_dump() for reference in output.references],
+                    }
+                ]
             if not state.receipt or state.receipt.get("status") == "preview":
                 state.receipt = None
                 state.payload = None
@@ -43,46 +49,8 @@ def build_team(state: WorkflowState, model: Any, *, enable_web: bool = False) ->
 
         return extract
 
-    async def read_search_result(item: dict) -> dict:
-        """Read a search result page so the researcher can identify prices."""
-        print(f"  [Reading price page] {item['url']}", flush=True)
-        try:
-            page = await asyncio.to_thread(DDGS(timeout=15).extract, item["url"], fmt="text_plain")
-            item["text"] = page["content"][:16000]
-        except DDGSException:
-            item["text"] = ""
-            item["message"] = "Page text could not be read; login or access restrictions may apply."
-        return item
-
-    @function_tool
-    async def search_web(query: str) -> str:
-        """Search comparable products and read the first three result pages."""
-        print(f"  [Web search] {query}", flush=True)
-        record = {
-            "tool": "search_web",
-            "query": query,
-            "observed_at": datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-        }
-        try:
-            matches = await asyncio.to_thread(
-                DDGS(timeout=15).text, query, region="cn-zh", max_results=6
-            )
-            results = [
-                {"title": item["title"], "url": item["href"], "snippet": item["body"]}
-                for item in matches
-            ]
-            pages = await asyncio.gather(*(read_search_result(item) for item in results[:3]))
-            record["results"] = list(pages) + results[3:]
-        except DDGSException:
-            record["results"] = []
-            record["message"] = (
-                "Search returned no usable results. Try different keywords; do not invent prices."
-            )
-        state.web_lookups.append(record)
-        return json.dumps(record, ensure_ascii=False)
-
     product_agent = build_product_agent(state, model)
-    market_agent = build_market_agent(state, model, search_web, enable_web=enable_web)
+    market_agent = build_market_agent(state, model, enable_web=enable_web)
     pricing_agent = build_pricing_agent(state, model)
     listing_agent = build_listing_agent(state, model)
     review_agent = build_review_agent(state, model)

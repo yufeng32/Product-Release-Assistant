@@ -10,9 +10,8 @@ This command-line application turns a seller's description into a reviewed WooCo
 
 | Technology | Role |
 |---|---|
-| OpenAI Agents SDK | Agent definitions, agents exposed as tools, tool execution, conversation history, and structured results |
-| DeepSeek API | Model responses for the main agent and all five subagents |
-| DDGS | Web search and page-text extraction for market research |
+| OpenAI Agents SDK | Agent definitions, agents exposed as tools, hosted web search, tool execution, conversation history, and structured results |
+| OpenAI Responses API | Model responses for the main agent and all five subagents |
 | Pydantic | Typed output models and validation of agent results |
 | WooCommerce REST API | Creation of simple products in the configured WordPress store |
 
@@ -51,14 +50,14 @@ product_agent.as_tool(
 
 The output extractor saves the typed result in shared state and returns its JSON to the manager. All output models are defined in [models.py](models.py). Here, `copy` means the written product listing; `PriceReference` describes a comparable product inside `MarketReport` and is not another agent.
 
-#### Additional function tools
+#### Additional tools
 
 | Tool | Called by | Implementation | Function |
 |---|---|---|---|
-| `search_web(query)` | Market Researcher, when web access is enabled | [agent_team.py](agent_team.py) | Search comparable products and read the first three result pages. |
+| `WebSearchTool` | Market Researcher, when web access is enabled | [market_agent.py](market_agent.py) | Use OpenAI's hosted web search and return cited web-grounded evidence to the researcher. |
 | `submit_listing()` | Sales Manager | [agent_team.py](agent_team.py), using [woocommerce_client.py](woocommerce_client.py) | Check analysis and review, build the product payload, and generate a preview or create a store product. |
 
-The manager has **six tools: five subagent tools and one submission function tool**. The search function belongs to the market subagent. These function tools perform operations directly; they are not additional subagents.
+The manager has **six tools: five subagent tools and one submission function tool**. The hosted search tool belongs to the market subagent and is not another subagent.
 
 ```mermaid
 flowchart TD
@@ -68,7 +67,7 @@ flowchart TD
     M <-->|recommend_price| C[Pricing Strategist]
     M <-->|write_listing| D[Sales Copywriter]
     M <-->|review_listing| E[Buyer Perspective Reviewer]
-    B --> S[search_web]
+    B --> S[OpenAI WebSearchTool]
     M --> T[submit_listing]
     T --> P[preview: local JSON]
     T --> W[draft / publish: WooCommerce REST API]
@@ -80,19 +79,19 @@ flowchart TD
 
 The normal progression is **product facts → market research → pricing → listing copy → review → submission**. The manager chooses the next tool from current results rather than following a fixed Python pipeline. Its instructions request one tool call at a time, and model settings disable parallel tool calls. The instructions allow at most two revision rounds. The runner limits each manager run to 24 turns; specialist runs allow four turns each, or six for market research.
 
-`WorkflowState` in [main.py](main.py) holds inputs, currency, mode, quantity, images, references, stage results, tool events, search records, the payload, and the submission receipt. [agent_instructions.py](agent_instructions.py) supplies common rules and the latest shared state whenever an agent starts a turn. Store credentials are excluded from that context and the JSON export.
+`WorkflowState` in [main.py](main.py) holds inputs, currency, mode, quantity, images, references, stage results, tool events, cited search-source records, the payload, and the submission receipt. [agent_instructions.py](agent_instructions.py) supplies common rules and the latest shared state whenever an agent starts a turn. Store credentials are excluded from that context and the JSON export.
 
 Replacing a specialist result clears dependent results in the order `facts` → `market` → `pricing` → `copy` → `review`. Repricing therefore clears old copy and review; rewriting clears the old review. A prior preview is cleared for regeneration, while receipts for real submission attempts are retained to prevent another creation attempt in that conversation.
 
 #### Market research and pricing
 
-Web research is enabled by default. `search_web` requests up to six DDGS results and reads the first three pages concurrently. It retains titles, URLs, snippets, available page text, queries, and Macau-time observation timestamps. Each page contributes up to 16,000 characters of text; DDGS operations use a 15-second timeout. No separate search API key is required.
+Web research is enabled by default. The Market Researcher receives the Agents SDK's hosted `WebSearchTool` with medium search context. Search runs through the OpenAI Responses API, so it uses the same `OPENAI_API_KEY` as the agents and needs no separate search provider or scraping dependency. Source URLs used for pricing are preserved in `MarketReport.references`.
 
-The market agent is instructed to search at most twice, prefer comparable models and condition, distinguish asking prices from completed sales, and use prices explicitly shown in the retrieved material. Missing prices remain `unknown`; access restrictions and fictional references must be explained. These evidence rules are agent instructions, not an independent verification of every quoted price.
+The market agent is instructed to search before writing its report, prefer comparable models and condition, distinguish asking prices from completed sales, and use prices explicitly shown in retrieved material. Missing prices remain `unknown`; access restrictions and fictional references must be explained. These evidence rules are agent instructions, not an independent verification of every quoted price.
 
 Pricing considers condition, accessories, defects, selling speed, and market evidence. An explicitly fixed seller price should be respected. If usable evidence is unavailable, an explicit seller price may be used with an explanation. If neither is available, the agent returns `suggested_price=null`. Foreign currencies are not automatically converted.
 
-`--no-web` disables search and page reading. It still calls DeepSeek to analyze seller information and supplied references.
+`--no-web` omits the hosted search tool. The OpenAI model still analyzes seller information and supplied references.
 
 #### Follow-up questions and submission checks
 
@@ -108,23 +107,23 @@ Before preparing a preview or contacting WooCommerce, `submit_listing` checks th
 
 These checks run in Python. The quality of factual interpretation, comparisons, and review judgments depends on model output and available evidence.
 
-#### DeepSeek adapter
+#### OpenAI model configuration
 
-[deepseek_model.py](deepseek_model.py) defines `DeepSeekModel` and `create_model()`. It uses the OpenAI-compatible Chat Completions client with the configured DeepSeek endpoint. The adapter adds the expected JSON schema to instructions, requests `json_object` output, disables thinking, and uses non-strict function-tool schemas. The SDK still parses and validates final responses against each agent's `output_type`.
+[openai_model.py](openai_model.py) defines `create_model()`. It creates an `OpenAIResponsesModel` with the official `AsyncOpenAI` client. The Agents SDK sends structured outputs, function tools, and hosted web search through the Responses API.
 
-All agents share the configured model. The application's runner disables OpenAI cloud tracing, so this workflow does not require an OpenAI API key.
+All agents share the configured model. `OPENAI_API_KEY` is required for `run`; tracing is disabled by the application, but model and hosted-search requests still use the OpenAI API.
 
 ### 4. Code Map
 
 | File or directory | Purpose |
 |---|---|
 | [main.py](main.py) | CLI entry point, `WorkflowState`, configuration, manager execution, interaction, and JSON export |
-| [agent_team.py](agent_team.py) | Team assembly, `.as_tool()` wrappers, result storage and invalidation, search, and submission |
+| [agent_team.py](agent_team.py) | Team assembly, `.as_tool()` wrappers, result storage and invalidation, and submission |
 | [agent_instructions.py](agent_instructions.py) | Shared language and factuality rules; dynamic instructions containing current state |
 | [manager_agent.py](manager_agent.py) | Main agent instructions and constructor |
 | [product_agent.py](product_agent.py), [market_agent.py](market_agent.py), [pricing_agent.py](pricing_agent.py), [listing_agent.py](listing_agent.py), [review_agent.py](review_agent.py) | Instructions and constructors for the five specialist subagents |
 | [models.py](models.py) | `ProductFacts`, `PriceReference`, `MarketReport`, `PricingAdvice`, `ListingCopy`, `ReviewReport`, and `ManagerAnswer` |
-| [deepseek_model.py](deepseek_model.py) | Model client configuration and structured-output adaptation |
+| [openai_model.py](openai_model.py) | OpenAI Responses model and client configuration |
 | [woocommerce_client.py](woocommerce_client.py) | Store configuration, product payload construction, and creation requests |
 | [.env.example](.env.example), [requirements.txt](requirements.txt) | Configuration template and Python dependencies |
 | [examples/request.txt](examples/request.txt) | Used-monitor request for the fictional reference example |
@@ -136,7 +135,7 @@ All agents share the configured model. The application's runner disables OpenAI 
 
 `.venv/` and `__pycache__/` are generated environment and bytecode directories. `.gitignore` excludes these, `.env`, `outputs/`, and `local_app/`.
 
-Suggested reading order: `main.py` → `agent_team.py` → the six agent modules → `models.py` → `deepseek_model.py` and `woocommerce_client.py`.
+Suggested reading order: `main.py` → `agent_team.py` → the six agent modules → `models.py` → `openai_model.py` and `woocommerce_client.py`.
 
 ### 5. Installation and Configuration
 
@@ -157,17 +156,17 @@ Reuse an existing configured `.env` file. The application loads it from the proj
 
 | Variable | Default in code | Purpose |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | Empty | Required for `run`, including preview |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | Model API base URL |
-| `DEEPSEEK_MODEL` | `deepseek-flash` | Model used by every agent |
+| `OPENAI_API_KEY` | Empty | Required for `run`, including preview and hosted web search |
+| `OPENAI_BASE_URL` | OpenAI's official API | Optional OpenAI-compatible Responses API endpoint |
+| `OPENAI_MODEL` | `gpt-5-nano` | Low-cost Responses API model used by every agent |
 | `WOOCOMMERCE_URL` | Empty | WordPress site root URL for `draft` and `publish` |
 | `WOOCOMMERCE_CONSUMER_KEY` | Empty | Store REST API consumer key |
 | `WOOCOMMERCE_CONSUMER_SECRET` | Empty | Store REST API consumer secret |
 | `STORE_CURRENCY` | `CNY` | Expected pricing currency, normalized to uppercase |
 
-`deepseek-flash` is the name configured in this project's code and template; set it to a model available to your account. Replace the template's placeholder store URL before submission.
+`gpt-5-nano` is the official-endpoint default. When `OPENAI_BASE_URL` points to a compatible provider, set `OPENAI_MODEL` to a model name offered by that provider. The endpoint must support the Responses API and function calling; hosted web search may not be available, so test with `--no-web` first. Replace the template's placeholder store URL before submission.
 
-Dependencies pin `openai-agents==0.15.1`, `openai==2.34.0`, and `ddgs==9.16.0`, and include `httpx` and `python-dotenv`. Pydantic is installed through SDK dependencies. Preview needs a DeepSeek key but no WooCommerce credentials. Structure checks and offline tests need neither service's credentials.
+Dependencies pin `openai-agents==0.15.1` and `openai==2.34.0`, and include `httpx` and `python-dotenv`. Pydantic is installed through SDK dependencies. Preview needs an OpenAI API key but no WooCommerce credentials. Structure checks and offline tests need neither service's credentials.
 
 ### 6. Usage
 
@@ -185,7 +184,7 @@ This lists the manager and its six tools without model, search, or store request
 .\.venv\Scripts\python.exe main.py run --request-file examples/request.txt --references examples/market_samples.json --no-web
 ```
 
-The references are fictional classroom data, not real market observations. This command uses DeepSeek, skips web research, and saves a local preview if the workflow completes.
+The references are fictional classroom data, not real market observations. This command uses the OpenAI model, skips hosted web research, and saves a local preview if the workflow completes.
 
 #### Preview with online research
 
@@ -193,7 +192,7 @@ The references are fictional classroom data, not real market observations. This 
 .\.venv\Scripts\python.exe main.py run --request-file examples/request_web.txt
 ```
 
-The terminal shows searches, pages being read, completed stages, the manager's response, and the output location. If essential information is missing, results and questions are saved.
+The terminal shows completed stages, the manager's response, and the output location. If essential information is missing, results and questions are saved. Web citations used by the researcher appear in the market references.
 
 #### Describe a product interactively
 
@@ -261,7 +260,7 @@ The application saves UTF-8 JSON after each manager response and in the runner l
 | `woocommerce_payload` | Prepared product data, or `null` before preparation |
 | `submission_receipt` | Preview or submission record, or `null` before submission |
 | `tool_events` | Completed specialist and submission events |
-| `web_lookups` | Search queries, sources, page text, and observation timestamps |
+| `web_lookups` | OpenAI web-search provider label and the cited source records returned in the market report |
 
 Incomplete or invalidated stages may be absent. The default output file is overwritten; use `--output` to preserve separate runs.
 
@@ -278,10 +277,10 @@ The store client has a 30-second timeout, verifies TLS certificates, does not fo
 | Test file | Coverage |
 |---|---|
 | [tests/test_workflow.py](tests/test_workflow.py) | SDK orchestration, five specialist tools, independent shared states, revisions, submission checks, duplicate prevention, interrupted submission, payloads, and mocked store responses |
-| [tests/test_deepseek.py](tests/test_deepseek.py) | DeepSeek request adaptation, structured output validation, search and page reading, failed searches, and preservation of all search hits |
+| [tests/test_openai.py](tests/test_openai.py) | OpenAI Responses model configuration, API-key validation, hosted web-search setup, and `--no-web` behavior |
 | [tests/test_interaction.py](tests/test_interaction.py) | Essential versus optional questions, supplements and history, noninteractive output, and multilingual input/export |
 
-Model responses, searches, and store responses are simulated. The tests verify local behavior without API credits or store changes; they do not establish live service availability or market-price accuracy.
+Model responses and store responses are simulated. The tests verify local behavior without API credits or store changes; they do not establish live service availability or market-price accuracy.
 
 ### 9. Current Scope
 
@@ -301,9 +300,8 @@ Each program start creates a new state. Saved JSON is for inspecting results, no
 
 | 技术 | 作用 |
 |---|---|
-| OpenAI Agents SDK | 定义智能体、将智能体包装为工具、执行工具、管理对话历史及结构化结果 |
-| DeepSeek API | 为主智能体和全部五个子智能体提供模型响应 |
-| DDGS | 为市场调研提供网页搜索和页面文本提取 |
+| OpenAI Agents SDK | 定义智能体、将智能体包装为工具、使用托管网页搜索、执行工具、管理对话历史及结构化结果 |
+| OpenAI Responses API | 为主智能体和全部五个子智能体提供模型响应 |
 | Pydantic | 定义输出数据模型并校验智能体结果 |
 | WooCommerce REST API | 在配置的 WordPress 店铺中创建简单商品 |
 
@@ -342,14 +340,14 @@ product_agent.as_tool(
 
 输出提取器将带类型的结果保存到共享状态，并以 JSON 返回给主智能体。全部输出模型定义在 [models.py](models.py) 中。这里的 `copy` 指商品文案；`PriceReference` 用于描述 `MarketReport` 中的可比商品，并不是另一个智能体。
 
-#### 其他函数工具
+#### 其他工具
 
 | 工具 | 调用者 | 实现位置 | 功能 |
 |---|---|---|---|
-| `search_web(query)` | 开启联网功能时的 Market Researcher | [agent_team.py](agent_team.py) | 搜索可比商品，并读取前三条结果对应的页面。 |
+| `WebSearchTool` | 开启联网功能时的 Market Researcher | [market_agent.py](market_agent.py) | 使用 OpenAI 托管网页搜索，并向调研智能体返回带引用的联网证据。 |
 | `submit_listing()` | Sales Manager | [agent_team.py](agent_team.py)，调用 [woocommerce_client.py](woocommerce_client.py) | 检查分析与审核结果，构建商品请求数据，生成预览或在店铺中创建商品。 |
 
-主智能体共有**六个工具：五个子智能体工具和一个提交函数工具**。搜索函数由市场调研子智能体使用。这些函数工具直接执行操作，并不是额外的子智能体。
+主智能体共有**六个工具：五个子智能体工具和一个提交函数工具**。托管搜索工具属于市场调研子智能体，并不是另一个子智能体。
 
 ```mermaid
 flowchart TD
@@ -359,7 +357,7 @@ flowchart TD
     M <-->|recommend_price| C[Pricing Strategist]
     M <-->|write_listing| D[Sales Copywriter]
     M <-->|review_listing| E[Buyer Perspective Reviewer]
-    B --> S[search_web]
+    B --> S[OpenAI WebSearchTool]
     M --> T[submit_listing]
     T --> P[preview：本地 JSON]
     T --> W[draft / publish：WooCommerce REST API]
@@ -371,19 +369,19 @@ flowchart TD
 
 通常的流程为**商品事实 → 市场调研 → 定价 → 商品文案 → 审核 → 提交**。主智能体根据当前结果选择下一项工具，流程并非由固定的 Python 调用顺序决定。指令要求每次只调用一个工具，模型设置也关闭了并行工具调用。指令最多允许两轮修改。运行器将主智能体的每次运行限制为 24 轮；各子智能体最多运行 4 轮，市场调研子智能体为 6 轮。
 
-[main.py](main.py) 中的 `WorkflowState` 保存输入、币种、模式、数量、图片、参考材料、各阶段结果、工具事件、搜索记录、商品请求数据和提交回执。[agent_instructions.py](agent_instructions.py) 在智能体开始每一轮时提供通用规则和最新共享状态。店铺凭据不会进入这些上下文或导出的 JSON。
+[main.py](main.py) 中的 `WorkflowState` 保存输入、币种、模式、数量、图片、参考材料、各阶段结果、工具事件、带引用的搜索来源记录、商品请求数据和提交回执。[agent_instructions.py](agent_instructions.py) 在智能体开始每一轮时提供通用规则和最新共享状态。店铺凭据不会进入这些上下文或导出的 JSON。
 
 重新生成某个阶段的结果，会按照 `facts` → `market` → `pricing` → `copy` → `review` 的依赖顺序清除后续结果。因此，重新定价会清除旧文案和旧审核结果；重写文案会清除旧审核结果。已有预览会被清除，以便重新生成；实际提交尝试的回执则会保留，避免在同一段对话中再次创建商品。
 
 #### 市场调研与定价
 
-默认开启联网调研。`search_web` 最多获取六条 DDGS 搜索结果，并发读取前三个页面。程序保留标题、URL、摘要、可读取的页面文本、搜索关键词，以及使用澳门时间记录的观察时间戳。每个页面最多保留 16,000 个字符；DDGS 操作的超时时间为 15 秒。搜索功能不需要额外的搜索 API 密钥。
+默认开启联网调研。Market Researcher 使用 Agents SDK 的托管 `WebSearchTool`，搜索上下文设为 `medium`。搜索通过 OpenAI Responses API 完成，因此与智能体共用 `OPENAI_API_KEY`，不再需要单独的搜索服务或网页抓取依赖。用于定价的来源 URL 保存在 `MarketReport.references` 中。
 
-市场调研智能体的指令要求最多搜索两次，优先选择型号和成色可比的商品，区分挂牌价与已成交价格，并仅使用检索材料中明确显示的价格。缺失价格记为 `unknown`；访问限制和虚构参考材料必须说明。这些证据规则属于智能体指令，并不构成对每一项引用价格的独立核验。
+市场调研智能体的指令要求先搜索再撰写报告，优先选择型号和成色可比的商品，区分挂牌价与已成交价格，并仅使用检索材料中明确显示的价格。缺失价格记为 `unknown`；访问限制和虚构参考材料必须说明。这些证据规则属于智能体指令，并不构成对每一项引用价格的独立核验。
 
 定价综合考虑成色、配件、缺陷、出售速度和市场证据。卖家明确指定不可更改的价格时，应尊重该价格。没有可用市场证据时，可以采用卖家明确提供的价格，并说明局限；两者都不存在时，返回 `suggested_price=null`。程序不会自动换算外币。
 
-`--no-web` 关闭搜索和页面读取，但仍会调用 DeepSeek 分析卖家信息和提供的参考材料。
+`--no-web` 不向市场调研智能体提供托管搜索工具，但 OpenAI 模型仍会分析卖家信息和提供的参考材料。
 
 #### 补充提问与提交检查
 
@@ -399,23 +397,23 @@ flowchart TD
 
 这些检查由 Python 代码执行。事实理解、商品比较和审核判断的质量仍取决于模型输出及可用证据。
 
-#### DeepSeek 适配层
+#### OpenAI 模型配置
 
-[deepseek_model.py](deepseek_model.py) 定义 `DeepSeekModel` 和 `create_model()`，通过兼容 OpenAI 的 Chat Completions 客户端连接配置的 DeepSeek 接口。适配层将预期的 JSON Schema 加入指令，请求 `json_object` 输出，关闭思考模式，并使用非严格模式的函数工具 Schema。SDK 仍会按照各智能体的 `output_type` 解析和校验最终响应。
+[openai_model.py](openai_model.py) 定义 `create_model()`，使用官方 `AsyncOpenAI` 客户端创建 `OpenAIResponsesModel`。Agents SDK 通过 Responses API 处理结构化输出、函数工具和托管网页搜索。
 
-所有智能体共用配置的模型。应用运行器关闭了 OpenAI 云端追踪，因此该工作流不需要 OpenAI API 密钥。
+所有智能体共用配置的模型。`run` 命令需要 `OPENAI_API_KEY`；应用关闭了 tracing，但模型与托管搜索请求仍会使用 OpenAI API。
 
 ### 4. 代码与目录说明
 
 | 文件或目录 | 用途 |
 |---|---|
 | [main.py](main.py) | 命令行入口、`WorkflowState`、配置读取、主智能体运行、交互与 JSON 导出 |
-| [agent_team.py](agent_team.py) | 团队组装、`.as_tool()` 包装、结果保存与失效处理、搜索和提交 |
+| [agent_team.py](agent_team.py) | 团队组装、`.as_tool()` 包装、结果保存与失效处理和提交 |
 | [agent_instructions.py](agent_instructions.py) | 通用语言与事实规则，以及包含当前状态的动态指令 |
 | [manager_agent.py](manager_agent.py) | 主智能体的指令与构造函数 |
 | [product_agent.py](product_agent.py)、[market_agent.py](market_agent.py)、[pricing_agent.py](pricing_agent.py)、[listing_agent.py](listing_agent.py)、[review_agent.py](review_agent.py) | 五个专业子智能体的指令与构造函数 |
 | [models.py](models.py) | `ProductFacts`、`PriceReference`、`MarketReport`、`PricingAdvice`、`ListingCopy`、`ReviewReport` 和 `ManagerAnswer` |
-| [deepseek_model.py](deepseek_model.py) | 模型客户端配置与结构化输出适配 |
+| [openai_model.py](openai_model.py) | OpenAI Responses 模型与客户端配置 |
 | [woocommerce_client.py](woocommerce_client.py) | 店铺配置、商品请求数据构建及创建请求 |
 | [.env.example](.env.example)、[requirements.txt](requirements.txt) | 配置模板与 Python 依赖 |
 | [examples/request.txt](examples/request.txt) | 与虚构参考数据配套的二手显示器需求示例 |
@@ -427,7 +425,7 @@ flowchart TD
 
 `.venv/` 和 `__pycache__/` 分别是生成的虚拟环境目录和字节码目录。`.gitignore` 排除这些目录，以及 `.env`、`outputs/` 和 `local_app/`。
 
-建议阅读顺序：`main.py` → `agent_team.py` → 六个智能体模块 → `models.py` → `deepseek_model.py` 和 `woocommerce_client.py`。
+建议阅读顺序：`main.py` → `agent_team.py` → 六个智能体模块 → `models.py` → `openai_model.py` 和 `woocommerce_client.py`。
 
 ### 5. 安装与配置
 
@@ -448,17 +446,18 @@ Copy-Item .env.example .env
 
 | 变量 | 代码中的默认值 | 用途 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | 空 | `run` 命令必需，包括预览模式 |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | 模型 API 基础地址 |
-| `DEEPSEEK_MODEL` | `deepseek-flash` | 所有智能体使用的模型 |
+| `OPENAI_API_KEY` | 空 | `run` 命令必需，包括预览模式和托管网页搜索 |
+| `OPENAI_BASE_URL` | OpenAI 官方 API | 可选的 OpenAI 兼容 Responses API 地址 |
+| `OPENAI_MODEL` | `gpt-5-nano` | 所有智能体使用的低成本 Responses API 模型 |
+
+`gpt-5-nano` 是官方接口的默认模型。使用 `OPENAI_BASE_URL` 指向兼容服务时，请将 `OPENAI_MODEL` 改为该服务提供的模型名称。该接口必须支持 Responses API 和函数调用；托管网页搜索可能不可用，因此第一次应先使用 `--no-web` 测试。
 | `WOOCOMMERCE_URL` | 空 | `draft` 和 `publish` 使用的 WordPress 站点根地址 |
 | `WOOCOMMERCE_CONSUMER_KEY` | 空 | 店铺 REST API consumer key |
 | `WOOCOMMERCE_CONSUMER_SECRET` | 空 | 店铺 REST API consumer secret |
 | `STORE_CURRENCY` | `CNY` | 预期的定价币种，读取后转为大写 |
 
-`deepseek-flash` 是本项目代码和模板中配置的模型名称，可改为账户能够使用的模型。提交商品前，应将模板中的店铺占位地址替换为实际地址。
 
-依赖固定为 `openai-agents==0.15.1`、`openai==2.34.0` 和 `ddgs==9.16.0`，并包含 `httpx` 和 `python-dotenv`。Pydantic 由 SDK 的依赖安装。预览需要 DeepSeek 密钥，但不需要 WooCommerce 凭据；结构检查和离线测试均不需要这两项服务的凭据。
+依赖固定为 `openai-agents==0.15.1` 和 `openai==2.34.0`，并包含 `httpx` 和 `python-dotenv`。Pydantic 由 SDK 的依赖安装。预览需要 OpenAI API key，但不需要 WooCommerce 凭据；结构检查和离线测试均不需要这两项服务的凭据。
 
 ### 6. 使用方法
 
@@ -476,7 +475,7 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python.exe main.py run --request-file examples/request.txt --references examples/market_samples.json --no-web
 ```
 
-这些参考材料是虚构的课堂数据，不是真实市场观察。该命令调用 DeepSeek、跳过网页调研，并在工作流完成时保存本地预览。
+这些参考材料是虚构的课堂数据，不是真实市场观察。该命令调用 OpenAI 模型、跳过托管网页调研，并在工作流完成时保存本地预览。
 
 #### 使用在线调研生成预览
 
@@ -484,7 +483,7 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python.exe main.py run --request-file examples/request_web.txt
 ```
 
-终端显示搜索过程、正在读取的页面、已完成阶段、主智能体回复和输出位置。如果缺少必要信息，程序会保存已有结果和待回答问题。
+终端显示已完成阶段、主智能体回复和输出位置。如果缺少必要信息，程序会保存已有结果和待回答问题；调研智能体使用的网页引用会出现在市场参考数据中。
 
 #### 通过交互描述商品
 
@@ -552,7 +551,7 @@ Copy-Item .env.example .env
 | `woocommerce_payload` | 已准备的商品请求数据；准备前为 `null` |
 | `submission_receipt` | 预览或提交记录；提交前为 `null` |
 | `tool_events` | 专业子智能体完成事件和提交事件 |
-| `web_lookups` | 搜索关键词、来源、页面文本和观察时间戳 |
+| `web_lookups` | OpenAI 网页搜索标识，以及市场报告中返回的引用来源记录 |
 
 尚未完成或已经失效的阶段可能不会出现在结果中。默认输出文件会被覆盖；需要保留不同运行的结果时，使用 `--output` 指定文件。
 
@@ -569,10 +568,10 @@ Copy-Item .env.example .env
 | 测试文件 | 覆盖范围 |
 |---|---|
 | [tests/test_workflow.py](tests/test_workflow.py) | SDK 协调、五个子智能体工具、独立共享状态、修改流程、提交检查、防止重复创建、中断提交、商品请求数据及模拟店铺响应 |
-| [tests/test_deepseek.py](tests/test_deepseek.py) | DeepSeek 请求适配、结构化输出校验、搜索与页面读取、搜索失败处理，以及全部搜索结果的保留 |
+| [tests/test_openai.py](tests/test_openai.py) | OpenAI Responses 模型配置、API key 校验、托管网页搜索配置和 `--no-web` 行为 |
 | [tests/test_interaction.py](tests/test_interaction.py) | 必要问题与可选建议的区分、补充信息与历史、非交互输出，以及多语言输入和导出 |
 
-测试中的模型响应、搜索和店铺响应均为模拟数据。测试能够在不消耗 API 额度、不修改店铺的情况下验证本地行为，但不能证明在线服务的可用性或市场价格的准确性。
+测试中的模型响应和店铺响应均为模拟数据。测试能够在不消耗 API 额度、不修改店铺的情况下验证本地行为，但不能证明在线服务的可用性或市场价格的准确性。
 
 ### 9. 当前范围
 

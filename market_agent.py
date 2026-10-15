@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from agents import Agent, FunctionTool, ModelSettings
+from agents import Agent, ModelSettings, WebSearchTool
 
 from agent_instructions import render_instructions
 from models import MarketReport
@@ -36,10 +36,10 @@ instead of assuming CNY. Keep foreign-currency samples as separate references.
 """
 
 WEB_INSTRUCTIONS = """
-Call search_web first to find comparable products; the tool searches and reads
-page text. Prefer the same model, used condition, and the market matching the
-store currency. Search at most twice, changing keywords if the first results are
-unsuitable. Compare market prices even when the seller provides an asking price.
+Use OpenAI's web search before writing the report. Prefer the same model, used
+condition, and the market matching the store currency. Refine the search when
+the first results are unsuitable. Compare market prices even when the seller
+provides an asking price. Preserve source URLs in the structured references.
 """
 
 OFFLINE_INSTRUCTIONS = """
@@ -50,7 +50,6 @@ Web access is disabled. Analyze only references supplied by the seller.
 def build_market_agent(
     state: WorkflowState,
     model: Any,
-    search_web: FunctionTool,
     *,
     enable_web: bool = False,
 ) -> Agent:
@@ -64,9 +63,9 @@ def build_market_agent(
         instructions=render_instructions(state, instructions),
         model=model,
         output_type=MarketReport,
-        tools=[search_web] if enable_web else [],
+        tools=[WebSearchTool(search_context_size="medium")] if enable_web else [],
         model_settings=ModelSettings(
-            tool_choice="search_web" if enable_web else None,
+            tool_choice="required" if enable_web else None,
             parallel_tool_calls=False,
         ),
     )

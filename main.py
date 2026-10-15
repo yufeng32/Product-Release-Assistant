@@ -13,9 +13,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from agent_team import build_team
-from deepseek_model import DeepSeekModel as DeepSeekModel
-from deepseek_model import create_model
 from models import ManagerAnswer
+from openai_model import DEFAULT_OPENAI_MODEL, create_model
 from woocommerce_client import StoreConfig
 
 ROOT = Path(__file__).resolve().parent
@@ -237,7 +236,7 @@ def check_team() -> int:
     """List the manager and tools without calling external services."""
     team = build_team(
         WorkflowState(request="Offline structure check", store=StoreConfig()),
-        model="deepseek-flash",
+        model=DEFAULT_OPENAI_MODEL,
     )
     print("Main agent: " + team.name)
     for tool, label in zip(team.tools[:-1], STAGE_NAMES.values(), strict=False):
