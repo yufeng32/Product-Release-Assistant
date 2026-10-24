@@ -22,11 +22,9 @@ def build_payload(
     pricing: PricingAdvice,
     *,
     quantity: int,
-    image_urls: list[str],
     status: str,
-    image_ids: list[int] | None = None,
 ) -> dict:
-    """Build product data from copy, pricing, inventory, and seller images."""
+    """Build product data from copy, pricing, and inventory."""
     description = "<p>" + html.escape(listing.description).replace("\n", "<br>\n") + "</p>"
     return {
         "name": listing.title.strip(),
@@ -37,10 +35,6 @@ def build_payload(
         "short_description": html.escape(listing.short_description),
         "manage_stock": True,
         "stock_quantity": quantity,
-        "images": (
-            [{"id": image_id} for image_id in (image_ids or [])]
-            + [{"src": url} for url in image_urls]
-        ),
     }
 
 

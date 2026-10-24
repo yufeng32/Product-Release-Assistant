@@ -286,15 +286,13 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.pricing = PricingAdvice.model_validate(FIXTURES["PricingAdvice"])
 
     def payload(self, **kwargs):
-        return build_payload(
-            self.copy, self.pricing, quantity=1, image_urls=[], status="draft", **kwargs
-        )
+        return build_payload(self.copy, self.pricing, quantity=1, status="draft", **kwargs)
 
-    def test_plain_text_is_escaped_and_media_ids_preserved(self):
+    def test_plain_text_is_escaped_and_payload_has_no_images(self):
         self.copy.description = "<script>alert(1)</script>\nCase scratches"
-        data = self.payload(image_ids=[5])
+        data = self.payload()
         self.assertNotIn("<script>", data["description"])
-        self.assertEqual(data["images"], [{"id": 5}])
+        self.assertNotIn("images", data)
         self.assertEqual(data["stock_quantity"], 1)
 
     async def test_create_posts_product_and_returns_receipt(self):

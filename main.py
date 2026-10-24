@@ -38,8 +38,6 @@ class WorkflowState:
     store: StoreConfig
     mode: Literal["preview", "draft", "publish"] = "preview"
     quantity: int = 1
-    image_urls: list[str] = field(default_factory=list)
-    image_ids: list[int] = field(default_factory=list)
     supplied_references: str = ""
     results: dict[str, BaseModel] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -74,8 +72,6 @@ class WorkflowState:
                 "currency": self.store.currency,
                 "mode": self.mode,
                 "quantity": self.quantity,
-                "seller_image_urls": self.image_urls,
-                "seller_image_ids": self.image_ids,
                 "user_supplied_market_material": self.supplied_references,
                 "current_results": {key: value.model_dump() for key, value in self.results.items()},
                 "submission_receipt": self.receipt,
@@ -118,16 +114,6 @@ def parser() -> argparse.ArgumentParser:
         "--no-web", action="store_true", help="Disable web search; use supplied materials only"
     )
     run_parser.add_argument("--mode", choices=["preview", "draft", "publish"], default="preview")
-    run_parser.add_argument(
-        "--image-url", action="append", default=[], help="Seller product image URL; repeatable"
-    )
-    run_parser.add_argument(
-        "--image-id",
-        action="append",
-        type=int,
-        default=[],
-        help="Existing WordPress media ID; repeatable",
-    )
     run_parser.add_argument("--quantity", type=int, default=1)
     run_parser.add_argument(
         "--interactive",
@@ -165,8 +151,6 @@ async def run(args: argparse.Namespace) -> int:
         store=config,
         mode=args.mode,
         quantity=args.quantity,
-        image_urls=args.image_url,
-        image_ids=args.image_id,
         supplied_references=references,
     )
     manager = build_team(state, model, enable_web=not args.no_web)

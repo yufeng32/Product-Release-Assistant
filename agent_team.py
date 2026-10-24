@@ -96,8 +96,6 @@ def build_team(state: WorkflowState, model: Any, *, enable_web: bool = False) ->
             listing,
             pricing,
             quantity=state.quantity,
-            image_urls=state.image_urls,
-            image_ids=state.image_ids,
             status="publish" if state.mode == "publish" else "draft",
         )
         if state.mode == "preview":

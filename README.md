@@ -79,7 +79,7 @@ flowchart TD
 
 The normal progression is **product facts → market research → pricing → listing copy → review → submission**. The manager chooses the next tool from current results rather than following a fixed Python pipeline. Its instructions request one tool call at a time, and model settings disable parallel tool calls. The instructions allow at most two revision rounds. The runner limits each manager run to 24 turns; specialist runs allow four turns each, or six for market research.
 
-`WorkflowState` in [main.py](main.py) holds inputs, currency, mode, quantity, images, references, stage results, tool events, cited search-source records, the payload, and the submission receipt. [agent_instructions.py](agent_instructions.py) supplies common rules and the latest shared state whenever an agent starts a turn. Store credentials are excluded from that context and the JSON export.
+`WorkflowState` in [main.py](main.py) holds inputs, currency, mode, quantity, references, stage results, tool events, cited search-source records, the payload, and the submission receipt. [agent_instructions.py](agent_instructions.py) supplies common rules and the latest shared state whenever an agent starts a turn. Store credentials are excluded from that context and the JSON export.
 
 Replacing a specialist result clears dependent results in the order `facts` → `market` → `pricing` → `copy` → `review`. Repricing therefore clears old copy and review; rewriting clears the old review. A prior preview is cleared for regeneration, while receipts for real submission attempts are retained to prevent another creation attempt in that conversation.
 
@@ -219,16 +219,7 @@ Prepare a WordPress site with WooCommerce enabled, a working REST API, and a con
 
 The command-line mode selects the operation. After the required stages pass, `draft` and `publish` submit without a separate confirmation prompt.
 
-The client posts to `/wp-json/wc/v3/products`. The payload creates a `simple` product with a title, descriptions, `regular_price`, managed stock, and optional images. Plain-text descriptions are escaped for HTML. Preview payloads use `status="draft"` but remain local.
-
-Use existing WordPress media IDs or image URLs accessible to the store:
-
-```powershell
-.\.venv\Scripts\python.exe main.py run --interactive --mode draft --image-id 42 --image-id 43 --quantity 1 --output outputs/my-product.json
-.\.venv\Scripts\python.exe main.py run --interactive --mode draft --image-url https://example.com/product.jpg
-```
-
-Replace these example IDs and URL with your own. The application uses supplied images and provides photo suggestions; it does not generate images or upload local image files.
+The client posts to `/wp-json/wc/v3/products`. The payload creates a `simple` product with a title, descriptions, `regular_price`, and managed stock. Plain-text descriptions are escaped for HTML. Preview payloads use `status="draft"` but remain local. The application does not accept or submit product images; it may only provide text-based photo suggestions.
 
 #### Command-line options
 
@@ -240,8 +231,6 @@ Replace these example IDs and URL with your own. The application uses supplied i
 | `--no-web` | Disable web search and page reading |
 | `--interactive` | Read supplements when essential questions remain |
 | `--mode preview/draft/publish` | Select the output/store action; default: `preview` |
-| `--image-id number` | Add an existing WordPress media image; repeatable |
-| `--image-url URL` | Add an image URL; repeatable |
 | `--quantity number` | Set stock quantity; default: `1` |
 | `--output path` | Choose the result JSON; default: the project's `outputs/latest.json` |
 
@@ -265,8 +254,6 @@ The application saves UTF-8 JSON after each manager response and in the runner l
 Incomplete or invalidated stages may be absent. The default output file is overwritten; use `--output` to preserve separate runs.
 
 Receipts distinguish **`preview`** (local data only), **`draft` / `publish`** (the store returned a product status, ID, and link), and **`unknown`** (creation was attempted but no successful response was recorded). The program sets `unknown` before posting, preserving that status after a failed or interrupted attempt. Draft links may require administrator login.
-
-The store client has a 30-second timeout, verifies TLS certificates, does not follow redirects, and does not automatically retry creation. A non-preview receipt blocks another creation attempt in that conversation. Check the store backend after an `unknown` result because the product may already exist.
 
 ### 8. Offline Tests
 
@@ -510,16 +497,7 @@ Copy-Item .env.example .env
 
 命令行模式决定实际操作。必要阶段通过后，`draft` 和 `publish` 会直接提交，不再出现单独的确认提示。
 
-客户端向 `/wp-json/wc/v3/products` 发送 POST 请求。请求数据用于创建 `simple` 商品，包含标题、描述、`regular_price`、库存管理信息及可选图片。纯文本描述会进行 HTML 转义。预览请求数据使用 `status="draft"`，但只保存在本地。
-
-可以使用现有 WordPress 媒体 ID，或店铺能够访问的图片 URL：
-
-```powershell
-.\.venv\Scripts\python.exe main.py run --interactive --mode draft --image-id 42 --image-id 43 --quantity 1 --output outputs/my-product.json
-.\.venv\Scripts\python.exe main.py run --interactive --mode draft --image-url https://example.com/product.jpg
-```
-
-请将示例 ID 和 URL 替换为自己的图片。应用使用提供的图片并给出拍摄建议，不生成图片，也不上传本地图片文件。
+客户端向 `/wp-json/wc/v3/products` 发送 POST 请求。请求数据用于创建 `simple` 商品，包含标题、描述、`regular_price` 和库存管理信息。纯文本描述会进行 HTML 转义。预览请求数据使用 `status="draft"`，但只保存在本地。应用不接收或提交商品图片，只可能提供文字形式的拍摄建议。
 
 #### 命令行参数
 
@@ -531,8 +509,6 @@ Copy-Item .env.example .env
 | `--no-web` | 关闭网页搜索和页面读取 |
 | `--interactive` | 存在必要问题时接收补充信息 |
 | `--mode preview/draft/publish` | 选择输出或店铺操作；默认为 `preview` |
-| `--image-id number` | 添加现有 WordPress 媒体图片，可重复使用 |
-| `--image-url URL` | 添加图片 URL，可重复使用 |
 | `--quantity number` | 设置库存数量；默认为 `1` |
 | `--output path` | 指定结果 JSON 路径；默认为项目中的 `outputs/latest.json` |
 
@@ -557,7 +533,6 @@ Copy-Item .env.example .env
 
 回执区分 **`preview`**（仅本地数据）、**`draft` / `publish`**（店铺返回商品状态、ID 和链接）以及 **`unknown`**（已尝试创建，但未记录到成功响应）。程序在发送请求前将状态设为 `unknown`，请求失败或中断后会保留该状态。草稿链接可能需要管理员登录后才能访问。
 
-店铺客户端的超时时间为 30 秒，会验证 TLS 证书，不跟随重定向，也不会自动重试创建请求。出现非预览回执后，同一段对话中不能再次尝试创建。遇到 `unknown` 结果时，应先检查店铺后台，因为商品可能已经创建。
 
 ### 8. 离线测试
 
